@@ -1,0 +1,66 @@
+
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TOTALLY SPY</title>
+
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <main class="app">
+
+        <header class="header">
+            <div class="logo">TOTALLY SPY<span>.</span></div>
+            <div class="profile" id="profile">🕵️</div>
+        </header>
+
+        <section class="welcome">
+            <div class="eyebrow">SECRET GAME EXPERIENCE</div>
+            <h1 id="greeting">Привіт, агенте.</h1>
+            <p id="subtitle">Готовий знайти шпигуна серед друзів?</p>
+        </section>
+
+        <section class="main-actions">
+            <button class="primary-button" onclick="openScreen('game')">
+                <span>🎮</span>
+                <span id="newGame">Нова гра</span>
+                <span class="arrow">→</span>
+            </button>
+
+            <button class="menu-button" onclick="openScreen('packs')">
+                📦 <span id="myPacks">Мої паки</span>
+                <span class="arrow">→</span>
+            </button>
+
+            <button class="menu-button" onclick="openScreen('language')">
+                🌐 <span id="language">Мова</span>
+                <span class="arrow">→</span>
+            </button>
+
+            <button class="menu-button" onclick="openScreen('stats')">
+                🏆 <span id="stats">Статистика</span>
+                <span class="arrow">→</span>
+            </button>
+        </section>
+
+        <footer>
+            <span>TOTALLY SPY © 2026</span>
+            <span>THE SECRET IS EVERYWHERE</span>
+        </footer>
+
+        <section id="screen" class="screen hidden">
+            <button class="back-button" onclick="goHome()">← Назад</button>
+            <h2 id="screenTitle"></h2>
+            <div id="screenContent"></div>
+        </section>
+
+    </main>
+
+    <script src="app.js"></script>
+</body>
+</html>
