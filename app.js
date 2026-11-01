@@ -36,6 +36,8 @@ const translations = {
         start: "Почати гру",
         copy: "Скопіювати код",
         copied: "Код скопійовано!",
+        invite: "Запросити друзів",
+        inviteText: "Приєднуйся до моєї кімнати TOTALLY SPY!",
         role: "Твоя роль",
         spy: "ТИ ШПИГУН",
         player: "ТИ ГРАВЕЦЬ",
@@ -54,6 +56,7 @@ const translations = {
         gameStarted: "Гру розпочато!",
         statsText: "Статистика з'явиться в наступних оновленнях."
     },
+
     en: {
         greeting: "Hello, agent.",
         subtitle: "Ready to find the spy?",
@@ -76,6 +79,8 @@ const translations = {
         start: "Start game",
         copy: "Copy code",
         copied: "Code copied!",
+        invite: "Invite friends",
+        inviteText: "Join my TOTALLY SPY room!",
         role: "Your role",
         spy: "YOU ARE THE SPY",
         player: "YOU ARE A PLAYER",
@@ -94,6 +99,7 @@ const translations = {
         gameStarted: "Game started!",
         statsText: "Statistics will arrive in a future update."
     },
+
     ru: {
         greeting: "Привет, агент.",
         subtitle: "Готов найти шпиона среди друзей?",
@@ -116,6 +122,8 @@ const translations = {
         start: "Начать игру",
         copy: "Скопировать код",
         copied: "Код скопирован!",
+        invite: "Пригласить друзей",
+        inviteText: "Присоединяйся к моей комнате TOTALLY SPY!",
         role: "Твоя роль",
         spy: "ТЫ ШПИОН",
         player: "ТЫ ИГРОК",
@@ -147,34 +155,42 @@ function showError(message) {
     if (!content) return;
 
     content.innerHTML = "";
+
     const p = document.createElement("p");
     p.className = "error-message";
     p.textContent = message;
+
     content.appendChild(p);
 }
 
 function makeButton(text, className, action) {
     const button = document.createElement("button");
+
     button.type = "button";
     button.className = className || "menu-button";
     button.textContent = text;
     button.addEventListener("click", action);
+
     return button;
 }
 
 function makeLabel(text) {
     const label = document.createElement("label");
+
     label.className = "form-label";
     label.textContent = text;
+
     return label;
 }
 
 function makeInput(placeholder, maxLength = 30) {
     const input = document.createElement("input");
+
     input.placeholder = placeholder;
     input.maxLength = maxLength;
     input.autocomplete = "off";
     input.className = "game-input";
+
     return input;
 }
 
@@ -191,7 +207,9 @@ function setLanguage(lang) {
     element("language").textContent = t().language;
     element("stats").textContent = t().stats;
 
-    if (tg) tg.HapticFeedback?.selectionChanged();
+    if (tg) {
+        tg.HapticFeedback?.selectionChanged();
+    }
 }
 
 function openScreen(name) {
@@ -268,12 +286,14 @@ async function showGameScreen() {
     setTitle(t().game);
 
     const content = element("screenContent");
+
     const loading = document.createElement("p");
     loading.textContent = t().loading;
     content.appendChild(loading);
 
     try {
         const packs = await api("/api/packs");
+
         content.innerHTML = "";
 
         const packLabel = makeLabel(t().choosePack);
@@ -282,8 +302,10 @@ async function showGameScreen() {
 
         packs.forEach(pack => {
             const option = document.createElement("option");
+
             option.value = pack.id;
             option.textContent = pack.name;
+
             packSelect.appendChild(option);
         });
 
@@ -293,8 +315,10 @@ async function showGameScreen() {
 
         [1, 2, 3].forEach(number => {
             const option = document.createElement("option");
+
             option.value = number;
             option.textContent = number;
+
             spySelect.appendChild(option);
         });
 
@@ -318,6 +342,7 @@ async function showGameScreen() {
 
                     currentRoom = room;
                     showRoomScreen();
+
                 } catch (error) {
                     showError(error.message);
                 }
@@ -337,10 +362,20 @@ async function showGameScreen() {
 // JOIN ROOM
 // ======================================
 
+async function joinRoom(code) {
+    currentRoom = await api("/api/rooms/join", {
+        method: "POST",
+        body: JSON.stringify({ code })
+    });
+
+    showRoomScreen();
+}
+
 function showJoinScreen() {
     setTitle(t().join);
 
     const content = element("screenContent");
+
     const label = makeLabel(t().code);
     const input = makeInput(t().enterCode, 6);
 
@@ -352,18 +387,13 @@ function showJoinScreen() {
         makeButton(t().joinButton, "primary-button", async () => {
             const code = input.value.trim().toUpperCase();
 
-            if (code.length !== 6) {
+            if (!/^[A-Z0-9]{6}$/.test(code)) {
                 showError("Код має містити 6 символів.");
                 return;
             }
 
             try {
-                currentRoom = await api("/api/rooms/join", {
-                    method: "POST",
-                    body: JSON.stringify({ code })
-                });
-
-                showRoomScreen();
+                await joinRoom(code);
             } catch (error) {
                 showError(error.message);
             }
@@ -377,6 +407,7 @@ function showJoinScreen() {
 
 function showRoomScreen() {
     clearInterval(refreshTimer);
+
     setTitle(`${t().code}: ${currentRoom.code}`);
 
     const content = element("screenContent");
@@ -387,6 +418,7 @@ function showRoomScreen() {
 
     content.appendChild(code);
 
+    // COPY ROOM CODE
     content.appendChild(
         makeButton(t().copy, "menu-button", async () => {
             try {
@@ -398,12 +430,34 @@ function showRoomScreen() {
         })
     );
 
+    // INVITE FRIENDS
+    content.appendChild(
+        makeButton(t().invite, "primary-button", () => {
+            const inviteLink =
+                `https://t.me/spyfalltotally_bot?startapp=${currentRoom.code}`;
+
+            const shareLink =
+                "https://t.me/share/url?url=" +
+                encodeURIComponent(inviteLink) +
+                "&text=" +
+                encodeURIComponent(t().inviteText);
+
+            if (tg?.openTelegramLink) {
+                tg.openTelegramLink(shareLink);
+            } else {
+                window.open(shareLink, "_blank");
+            }
+        })
+    );
+
     const playersTitle = document.createElement("h3");
     playersTitle.textContent = t().players;
+
     content.appendChild(playersTitle);
 
     const playersList = document.createElement("div");
     playersList.id = "playersList";
+
     content.appendChild(playersList);
 
     const startButton = makeButton(
@@ -425,6 +479,7 @@ function showRoomScreen() {
     const status = document.createElement("p");
     status.id = "roomStatus";
     status.textContent = t().waiting;
+
     content.appendChild(status);
 
     updateRoom();
@@ -449,11 +504,13 @@ async function updateRoom() {
         }
 
         const list = element("playersList");
+
         if (list) {
             list.innerHTML = "";
 
             room.players.forEach(player => {
                 const item = document.createElement("div");
+
                 item.className = "player-item";
                 item.textContent =
                     "🕵️ " + player.name +
@@ -476,7 +533,10 @@ async function updateRoom() {
 
     } catch (error) {
         const status = element("roomStatus");
-        if (status) status.textContent = error.message;
+
+        if (status) {
+            status.textContent = error.message;
+        }
     }
 }
 
@@ -494,6 +554,7 @@ async function startGame() {
         );
 
         tg?.HapticFeedback?.notificationOccurred("success");
+
         await updateRoom();
 
     } catch (error) {
@@ -531,6 +592,7 @@ function showMyRole(room) {
         hint.textContent = role.hint;
 
         card.append(heading, hintTitle, hint);
+
     } else {
         const heading = document.createElement("h2");
         heading.textContent = t().player;
@@ -549,6 +611,7 @@ function showMyRole(room) {
 
     const note = document.createElement("p");
     note.textContent = "Не показуй свою роль іншим гравцям!";
+
     content.appendChild(note);
 
     tg?.HapticFeedback?.notificationOccurred("success");
@@ -562,16 +625,20 @@ async function showPacksScreen() {
     setTitle(t().packs);
 
     const content = element("screenContent");
+
     const loading = document.createElement("p");
     loading.textContent = t().loading;
+
     content.appendChild(loading);
 
     try {
         const packs = await api("/api/packs");
+
         content.innerHTML = "";
 
         packs.forEach(pack => {
             const item = document.createElement("div");
+
             item.className = "player-item";
             item.textContent =
                 "📦 " + pack.name +
@@ -622,6 +689,29 @@ function showStatsScreen() {
 }
 
 // ======================================
+// AUTO JOIN FROM TELEGRAM INVITE LINK
+// ======================================
+
+async function joinFromInviteLink() {
+    const startParam = tg?.initDataUnsafe?.start_param;
+
+    if (!startParam) return;
+
+    const code = startParam.trim().toUpperCase();
+
+    if (!/^[A-Z0-9]{6}$/.test(code)) return;
+
+    try {
+        await joinRoom(code);
+
+    } catch (error) {
+        element("screen").classList.remove("hidden");
+        setTitle(t().join);
+        showError(error.message);
+    }
+}
+
+// ======================================
 // INIT
 // ======================================
 
@@ -630,3 +720,5 @@ setLanguage(
         ? currentLanguage
         : "uk"
 );
+
+joinFromInviteLink();
