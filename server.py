@@ -1,4 +1,3 @@
-
 import os
 import json
 import time
@@ -11,20 +10,26 @@ import string
 from pathlib import Path
 from urllib.parse import parse_qsl
 
+import psycopg
+from psycopg.rows import dict_row
+
 from fastapi import FastAPI, Header, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+
 
 # ==========================================
 # CONFIGURATION
 # ==========================================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 if not BOT_TOKEN:
-    raise RuntimeError(
-        "BOT_TOKEN is missing. Set it in environment variables."
-    )
+    raise RuntimeError("BOT_TOKEN is missing")
+
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL is missing")
 
 BASE_DIR = Path(__file__).parent
 PACKS_FILE = BASE_DIR / "packs_default.json"
@@ -35,13 +40,51 @@ if not PACKS_FILE.exists():
 with open(PACKS_FILE, "r", encoding="utf-8") as file:
     DEFAULT_PACKS = json.load(file)
 
+
+def get_db():
+    return psycopg.connect(
+        DATABASE_URL,
+        row_factory=dict_row,
+        connect_timeout=15
+    )
+
+
+def init_database():
+    with get_db() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS rooms (
+                code VARCHAR(6) PRIMARY KEY,
+                host_id BIGINT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'waiting',
+                pack_id TEXT NOT NULL,
+                spy_count INTEGER NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS players (
+                room_code VARCHAR(6) NOT NULL
+                    REFERENCES rooms(code) ON DELETE CASCADE,
+                user_id BIGINT NOT NULL,
+                name TEXT NOT NULL,
+                language TEXT NOT NULL DEFAULT 'uk',
+                role TEXT,
+                word TEXT,
+                hint TEXT,
+                joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                PRIMARY KEY (room_code, user_id)
+            )
+        """)
+
+
+init_database()
+
 app = FastAPI(title="TOTALLY SPY API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://unprocessed34.github.io"
-    ],
+    allow_origins=["https://unprocessed34.github.io"],
     allow_credentials=False,
     allow_methods=["GET", "POST"],
     allow_headers=[
@@ -49,9 +92,6 @@ app.add_middleware(
         "X-Telegram-Init-Data"
     ],
 )
-
-# Prototype storage. Rooms disappear when the server restarts.
-rooms = {}
 
 
 # ==========================================
@@ -66,10 +106,7 @@ def verify_telegram_data(init_data: str):
         )
 
     try:
-        parsed = dict(
-            parse_qsl(init_data, keep_blank_values=True)
-        )
-
+        parsed = dict(parse_qsl(init_data, keep_blank_values=True))
         received_hash = parsed.pop("hash", None)
 
         if not received_hash:
@@ -97,10 +134,7 @@ def verify_telegram_data(init_data: str):
             hashlib.sha256
         ).hexdigest()
 
-        if not hmac.compare_digest(
-            calculated_hash,
-            received_hash
-        ):
+        if not hmac.compare_digest(calculated_hash, received_hash):
             raise ValueError("Invalid signature")
 
         telegram_user = json.loads(parsed["user"])
@@ -143,16 +177,14 @@ class JoinRoomRequest(BaseModel):
 
 
 # ==========================================
-# TRANSLATIONS AND WORDS
+# PACKS AND LANGUAGES
 # ==========================================
 
 def normalize_language(language):
     if language.startswith("en"):
         return "en"
-
     if language.startswith("ru"):
         return "ru"
-
     return "uk"
 
 
@@ -166,8 +198,7 @@ def get_pack(pack_id):
 
 
 def get_pack_words(pack_id):
-    pack = get_pack(pack_id)
-    words = pack.get("words", [])
+    words = get_pack(pack_id).get("words", [])
 
     if len(words) < 2:
         raise HTTPException(400, "Pack has too few words")
@@ -197,80 +228,47 @@ def get_pack_name(pack_id, language):
 
 
 # ==========================================
-# SPY CLUES
+# SPY HINTS
 # ==========================================
 
 CLUES = {
     "uk": {
-        "Парасолька":
-            "Про неї згадують, коли небо змінює плани.",
-        "Яблуко":
-            "Його часто пов'язують із вибором, знанням і спокусою.",
-        "Море":
-            "Воно може здаватися спокійним, але ніколи не буває цілком передбачуваним.",
-        "Літак":
-            "Він скорочує відстані, хоча сам не має постійного місця.",
-        "Книга":
-            "У ній можна загубитися, не зробивши жодного кроку.",
-        "Телефон":
-            "Він тримає поруч тих, хто може бути дуже далеко.",
-        "Годинник":
-            "Його помічають особливо часто, коли чогось чекають.",
-        "Міст":
-            "Він з'єднує те, що інакше залишалося б розділеним.",
-        "Ключ":
-            "Його цінність стає очевидною перед зачиненими дверима.",
-        "Дзеркало":
-            "Воно показує знайоме, але не завжди так, як очікуєш."
+        "Парасолька": "Про неї згадують, коли небо змінює плани.",
+        "Яблуко": "Його часто пов'язують із вибором, знанням і спокусою.",
+        "Море": "Воно може здаватися спокійним, але ніколи не буває цілком передбачуваним.",
+        "Літак": "Він скорочує відстані, хоча сам не має постійного місця.",
+        "Книга": "У ній можна загубитися, не зробивши жодного кроку.",
+        "Телефон": "Він тримає поруч тих, хто може бути дуже далеко.",
+        "Годинник": "Його помічають особливо часто, коли чогось чекають.",
+        "Міст": "Він з'єднує те, що інакше залишалося б розділеним.",
+        "Ключ": "Його цінність стає очевидною перед зачиненими дверима.",
+        "Дзеркало": "Воно показує знайоме, але не завжди так, як очікуєш."
     },
-
     "en": {
-        "Umbrella":
-            "People remember it when the sky changes its plans.",
-        "Apple":
-            "It is often linked with choice, knowledge and temptation.",
-        "Sea":
-            "It may look calm, but it is never entirely predictable.",
-        "Airplane":
-            "It shortens distances without having a permanent place.",
-        "Book":
-            "You can get lost in it without taking a single step.",
-        "Phone":
-            "It keeps close those who may be very far away.",
-        "Clock":
-            "People notice it most when they are waiting.",
-        "Bridge":
-            "It connects things that would otherwise remain apart.",
-        "Key":
-            "Its value becomes clear in front of a locked door.",
-        "Mirror":
-            "It shows something familiar, but not always as expected."
+        "Umbrella": "People remember it when the sky changes its plans.",
+        "Apple": "It is often linked with choice, knowledge and temptation.",
+        "Sea": "It may look calm, but it is never entirely predictable.",
+        "Airplane": "It shortens distances without having a permanent place.",
+        "Book": "You can get lost in it without taking a single step.",
+        "Phone": "It keeps close those who may be very far away.",
+        "Clock": "People notice it most when they are waiting.",
+        "Bridge": "It connects things that would otherwise remain apart.",
+        "Key": "Its value becomes clear in front of a locked door.",
+        "Mirror": "It shows something familiar, but not always as expected."
     },
-
     "ru": {
-        "Зонт":
-            "О нём вспоминают, когда небо меняет планы.",
-        "Яблоко":
-            "Его часто связывают с выбором, знанием и искушением.",
-        "Море":
-            "Оно может казаться спокойным, но никогда не бывает полностью предсказуемым.",
-        "Самолёт":
-            "Он сокращает расстояния, не имея постоянного места.",
-        "Книга":
-            "В ней можно потеряться, не сделав ни одного шага.",
-        "Телефон":
-            "Он держит рядом тех, кто может быть очень далеко.",
-        "Часы":
-            "Их особенно часто замечают, когда чего-то ждут.",
-        "Мост":
-            "Он соединяет то, что иначе оставалось бы разделённым.",
-        "Ключ":
-            "Его ценность становится очевидной перед закрытой дверью.",
-        "Зеркало":
-            "Оно показывает знакомое, но не всегда так, как ожидаешь."
+        "Зонт": "О нём вспоминают, когда небо меняет планы.",
+        "Яблоко": "Его часто связывают с выбором, знанием и искушением.",
+        "Море": "Оно может казаться спокойным, но никогда не бывает полностью предсказуемым.",
+        "Самолёт": "Он сокращает расстояния, не имея постоянного места.",
+        "Книга": "В ней можно потеряться, не сделав ни одного шага.",
+        "Телефон": "Он держит рядом тех, кто может быть очень далеко.",
+        "Часы": "Их особенно часто замечают, когда чего-то ждут.",
+        "Мост": "Он соединяет то, что иначе оставалось бы разделённым.",
+        "Ключ": "Его ценность становится очевидной перед закрытой дверью.",
+        "Зеркало": "Оно показывает знакомое, но не всегда так, как ожидаешь."
     }
 }
-
 
 FALLBACK_CLUES = {
     "uk": [
@@ -280,7 +278,6 @@ FALLBACK_CLUES = {
         "Воно має свою роль у повсякденному житті, хоча про це рідко замислюються.",
         "Його можна впізнати за наслідками, навіть не побачивши самого."
     ],
-
     "en": [
         "Its real importance becomes clearer in a particular situation.",
         "Almost everyone knows it, but people use it differently.",
@@ -288,7 +285,6 @@ FALLBACK_CLUES = {
         "It has a role in everyday life that people rarely consider.",
         "You can recognize its effects without seeing it directly."
     ],
-
     "ru": [
         "Его настоящее значение заметнее в определённой ситуации.",
         "Почти все его знают, но используют по-разному.",
@@ -301,7 +297,6 @@ FALLBACK_CLUES = {
 
 def make_spy_hint(word, language):
     language = normalize_language(language)
-
     clue = CLUES.get(language, {}).get(word)
 
     if clue:
@@ -311,24 +306,34 @@ def make_spy_hint(word, language):
 
 
 # ==========================================
-# ROOM HELPERS
+# DATABASE ROOM HELPERS
 # ==========================================
 
-def make_room_code():
+def make_room_code(conn):
     alphabet = string.ascii_uppercase + string.digits
 
-    while True:
+    for _ in range(30):
         code = "".join(
             secrets.choice(alphabet)
             for _ in range(6)
         )
 
-        if code not in rooms:
+        exists = conn.execute(
+            "SELECT 1 FROM rooms WHERE code = %s",
+            (code,)
+        ).fetchone()
+
+        if not exists:
             return code
 
+    raise HTTPException(500, "Could not generate room code")
 
-def get_room(code):
-    room = rooms.get(code.upper())
+
+def get_room_row(conn, code):
+    room = conn.execute(
+        "SELECT * FROM rooms WHERE code = %s",
+        (code.upper(),)
+    ).fetchone()
 
     if not room:
         raise HTTPException(404, "Room not found")
@@ -336,12 +341,27 @@ def get_room(code):
     return room
 
 
-def get_player(room, user):
-    return room["players"].get(str(user["id"]))
+def get_room_players(conn, code):
+    return conn.execute(
+        """
+        SELECT user_id, name, language, role, word, hint
+        FROM players
+        WHERE room_code = %s
+        ORDER BY joined_at ASC
+        """,
+        (code,)
+    ).fetchall()
 
 
-def require_player(room, user):
-    player = get_player(room, user)
+def require_player(conn, code, user):
+    player = conn.execute(
+        """
+        SELECT *
+        FROM players
+        WHERE room_code = %s AND user_id = %s
+        """,
+        (code, user["id"])
+    ).fetchone()
 
     if not player:
         raise HTTPException(
@@ -352,8 +372,9 @@ def require_player(room, user):
     return player
 
 
-def public_room_state(room, user):
-    player = require_player(room, user)
+def public_room_state(conn, room, user):
+    player = require_player(conn, room["code"], user)
+    players = get_room_players(conn, room["code"])
 
     result = {
         "code": room["code"],
@@ -367,16 +388,15 @@ def public_room_state(room, user):
         ),
         "players": [
             {
-                "id": item["id"],
+                "id": item["user_id"],
                 "name": item["name"],
-                "is_host": item["id"] == room["host_id"]
+                "is_host": item["user_id"] == room["host_id"]
             }
-            for item in room["players"].values()
+            for item in players
         ],
         "my_role": None
     }
 
-    # A player receives only their own role.
     if room["status"] == "playing":
         if player["role"] == "spy":
             result["my_role"] = {
@@ -406,7 +426,20 @@ def home():
 
 @app.get("/health")
 def health():
-    return {"ok": True}
+    try:
+        with get_db() as conn:
+            conn.execute("SELECT 1")
+
+        return {
+            "ok": True,
+            "database": "connected"
+        }
+
+    except Exception:
+        raise HTTPException(
+            503,
+            "Database connection failed"
+        )
 
 
 @app.get("/api/me")
@@ -443,28 +476,39 @@ def create_room(
 ):
     get_pack_words(data.pack_id)
 
-    code = make_room_code()
-    user_id = str(user["id"])
+    with get_db() as conn:
+        code = make_room_code(conn)
 
-    rooms[code] = {
-        "code": code,
-        "host_id": user["id"],
-        "status": "waiting",
-        "pack_id": data.pack_id,
-        "spy_count": data.spy_count,
-        "players": {
-            user_id: {
-                "id": user["id"],
-                "name": user["name"],
-                "language": normalize_language(user["language"]),
-                "role": None,
-                "word": None,
-                "hint": None
-            }
-        }
-    }
+        conn.execute(
+            """
+            INSERT INTO rooms
+                (code, host_id, status, pack_id, spy_count)
+            VALUES (%s, %s, 'waiting', %s, %s)
+            """,
+            (
+                code,
+                user["id"],
+                data.pack_id,
+                data.spy_count
+            )
+        )
 
-    return public_room_state(rooms[code], user)
+        conn.execute(
+            """
+            INSERT INTO players
+                (room_code, user_id, name, language)
+            VALUES (%s, %s, %s, %s)
+            """,
+            (
+                code,
+                user["id"],
+                user["name"],
+                normalize_language(user["language"])
+            )
+        )
+
+        room = get_room_row(conn, code)
+        return public_room_state(conn, room, user)
 
 
 # ==========================================
@@ -476,30 +520,53 @@ def join_room(
     data: JoinRoomRequest,
     user=Depends(get_current_user)
 ):
-    room = get_room(data.code)
+    code = data.code.upper()
 
-    if room["status"] != "waiting":
-        raise HTTPException(
-            400,
-            "Game has already started"
-        )
+    with get_db() as conn:
+        room = conn.execute(
+            "SELECT * FROM rooms WHERE code = %s FOR UPDATE",
+            (code,)
+        ).fetchone()
 
-    user_id = str(user["id"])
+        if not room:
+            raise HTTPException(404, "Room not found")
 
-    if user_id not in room["players"]:
-        if len(room["players"]) >= 20:
-            raise HTTPException(400, "Room is full")
+        if room["status"] != "waiting":
+            raise HTTPException(400, "Game has already started")
 
-        room["players"][user_id] = {
-            "id": user["id"],
-            "name": user["name"],
-            "language": normalize_language(user["language"]),
-            "role": None,
-            "word": None,
-            "hint": None
-        }
+        existing = conn.execute(
+            """
+            SELECT 1 FROM players
+            WHERE room_code = %s AND user_id = %s
+            """,
+            (code, user["id"])
+        ).fetchone()
 
-    return public_room_state(room, user)
+        if not existing:
+            count = conn.execute(
+                "SELECT COUNT(*) AS total FROM players WHERE room_code = %s",
+                (code,)
+            ).fetchone()["total"]
+
+            if count >= 20:
+                raise HTTPException(400, "Room is full")
+
+            conn.execute(
+                """
+                INSERT INTO players
+                    (room_code, user_id, name, language)
+                VALUES (%s, %s, %s, %s)
+                """,
+                (
+                    code,
+                    user["id"],
+                    user["name"],
+                    normalize_language(user["language"])
+                )
+            )
+
+        room = get_room_row(conn, code)
+        return public_room_state(conn, room, user)
 
 
 # ==========================================
@@ -511,8 +578,9 @@ def room_state(
     code: str,
     user=Depends(get_current_user)
 ):
-    room = get_room(code)
-    return public_room_state(room, user)
+    with get_db() as conn:
+        room = get_room_row(conn, code)
+        return public_room_state(conn, room, user)
 
 
 # ==========================================
@@ -524,70 +592,89 @@ def start_game(
     code: str,
     user=Depends(get_current_user)
 ):
-    room = get_room(code)
+    code = code.upper()
 
-    if user["id"] != room["host_id"]:
-        raise HTTPException(
-            403,
-            "Only the host can start the game"
+    with get_db() as conn:
+        room = conn.execute(
+            "SELECT * FROM rooms WHERE code = %s FOR UPDATE",
+            (code,)
+        ).fetchone()
+
+        if not room:
+            raise HTTPException(404, "Room not found")
+
+        if user["id"] != room["host_id"]:
+            raise HTTPException(
+                403,
+                "Only the host can start the game"
+            )
+
+        if room["status"] != "waiting":
+            raise HTTPException(
+                400,
+                "Game has already started"
+            )
+
+        players = get_room_players(conn, code)
+
+        if len(players) < 3:
+            raise HTTPException(
+                400,
+                "At least 3 players are required"
+            )
+
+        if room["spy_count"] >= len(players):
+            raise HTTPException(400, "Too many spies")
+
+        words = get_pack_words(room["pack_id"])
+        secret_word_data = random.choice(words)
+
+        spies = random.sample(
+            players,
+            room["spy_count"]
         )
 
-    if room["status"] != "waiting":
-        raise HTTPException(
-            400,
-            "Game has already started"
-        )
+        spy_ids = {
+            player["user_id"]
+            for player in spies
+        }
 
-    players = list(room["players"].values())
+        for player in players:
+            language = normalize_language(player["language"])
 
-    if len(players) < 3:
-        raise HTTPException(
-            400,
-            "At least 3 players are required"
-        )
-
-    if room["spy_count"] >= len(players):
-        raise HTTPException(
-            400,
-            "Too many spies"
-        )
-
-    words = get_pack_words(room["pack_id"])
-    secret_word_data = random.choice(words)
-
-    spies = random.sample(
-        players,
-        room["spy_count"]
-    )
-
-    spy_ids = {
-        player["id"]
-        for player in spies
-    }
-
-    for player in players:
-        language = normalize_language(
-            player["language"]
-        )
-
-        word = translated_word(
-            secret_word_data,
-            language
-        )
-
-        if player["id"] in spy_ids:
-            player["role"] = "spy"
-            player["word"] = None
-            player["hint"] = make_spy_hint(
-                word,
+            word = translated_word(
+                secret_word_data,
                 language
             )
-        else:
-            player["role"] = "player"
-            player["word"] = word
-            player["hint"] = None
 
-    room["status"] = "playing"
+            if player["user_id"] in spy_ids:
+                role = "spy"
+                player_word = None
+                hint = make_spy_hint(word, language)
+            else:
+                role = "player"
+                player_word = word
+                hint = None
+
+            conn.execute(
+                """
+                UPDATE players
+                SET role = %s, word = %s, hint = %s
+                WHERE room_code = %s AND user_id = %s
+                """,
+                (
+                    role,
+                    player_word,
+                    hint,
+                    code,
+                    player["user_id"]
+                )
+            )
+
+        conn.execute(
+            "UPDATE rooms SET status = 'playing' WHERE code = %s",
+            (code,)
+        )
 
     return {
         "status": "playing",
